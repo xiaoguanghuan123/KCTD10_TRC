@@ -1,0 +1,91 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import os
+
+def add_strand_info(chip_df, rfd_df, gene_bed_df, summit_col):    
+    import numpy as np
+    rfd, strand, genes = [], [],[]
+    annot_df = chip_df.copy()
+    for x in annot_df.index:
+        chrom, summit = annot_df.loc[x, ['chrom',summit_col]]
+        if ';' in str(summit): summit = np.mean(list(map(int, summit.split(';'))))
+        else: summit = int(summit)
+        rfd_peak = rfd_df.loc[(rfd_df.chrom == chrom) & (rfd_df.st - 1000 <= summit) & (rfd_df.ed + 1000 >= summit), 'rfd']
+        gene_in_peak = gene_bed_df.loc[(gene_bed_df.chrom == chrom)& (gene_bed_df.start - 1000 <= summit) & (gene_bed_df.end + 1000 >= summit), ['strand','annotation' ]]
+        if len(rfd_peak) == 0: rfd.append(0)
+        else:
+            #print(rfd_peak)
+            rfd.append(float(rfd_peak.values[0]))
+        if len(gene_in_peak) == 0: 
+            strand.append("na")
+            genes.append('na')
+        else: 
+            strand.append(str(gene_in_peak['strand'].values[0]))
+            genes.append(list(gene_in_peak['annotation'])[0].split(';')[0].split('-')[1])
+            #print(gene_in_peak)
+    annot_df['rfd'] = rfd
+    annot_df['strand'] = strand
+    annot_df['gene'] = genes
+
+    
+    annot_df.loc[(annot_df['rfd']>0) & (annot_df['strand'] == '+'), ['trc_type']] = 'CO'
+    annot_df.loc[(annot_df['rfd']<0) & (annot_df['strand'] == '-'), ['trc_type']] = 'CO'
+    annot_df.loc[(annot_df['rfd']>0) & (annot_df['strand'] == '-'), ['trc_type']] = 'HO'
+    annot_df.loc[(annot_df['rfd']<0) & (annot_df['strand'] == '+'), ['trc_type']] = 'HO'
+    CO, HO = len(annot_df.loc[annot_df['trc_type'] == 'CO','gene'].unique()), len(annot_df.loc[annot_df['trc_type'] == 'HO','gene'].unique())
+    
+    return CO, HO, annot_df
+
+
+    ### load gene bed 
+gene_bed = 'GRCh38.gene.bed'
+dfgene_bed = pd.read_csv(gene_bed, sep = '\t', usecols = [0,3,4,6, 8], header = None, names = ['chrom', 'start', 'end', 'strand', 'annotation'])
+dfgene_bed.start = dfgene_bed.start.astype(int)
+dfgene_bed.end = dfgene_bed.end.astype(int)
+
+
+### load rfd 
+dfrfd = pd.read_csv("okSeq_RFD_cutoff10_bs1kb_sm_15kb.bedgraph", sep = '\t', header = None, index_col = 0, names = ['chrom','st','ed','rfd'])
+dfrfd = dfrfd.loc[~dfrfd.duplicated()].reset_index()
+dfrfd_filt = dfrfd.loc[abs(dfrfd.rfd) >=0.6].sort_values(by = 'st')
+
+### decided to only work on the merged regions 
+names = ['chrom','start', 'end', 'source', 'experiment', 'summit']
+dfk10_mock = pd.read_csv("KCTD_Control_merged.bed", sep = '\t', header = None, names = names)
+dfk10_icrf = pd.read_csv('KCTD_ICRF_merged.bed', sep = '\t', header = None, names = names)
+
+
+CO_mock, HO_mock, dfk10_mock_annot = add_strand_info(dfk10_mock, dfrfd_filt, dfgene_bed,'start')
+pGene_mock = dfk10_mock_annot.loc[dfk10_mock_annot['gene'] != 'na', 'gene'].unique()
+print('gene models associated with peaks in untreated samples are: ',len(pGene_mock) )
+print('genes show CO t-r conflicts are: ', CO_mock)
+print('genes show HO t-r conflicts are: ', HO_mock)
+display(dfk10_mock_annot)
+
+
+CO_icrf, HO_icrf, dfk10_icrf_annot = add_strand_info(dfk10_icrf, dfrfd_filt, dfgene_bed,'start')
+pGene_icrf = dfk10_icrf_annot.loc[dfk10_icrf_annot['gene'] != 'na', 'gene'].unique()
+print('gene models associated with peaks in icrf treated samples are: ', len(pGene_icrf))
+print('genes show CO t-r conflicts are: ', CO_icrf)
+print('genes show HO t-r conflicts are: ', HO_icrf)
+display(dfk10_icrf_annot)
+
+from matplotlib_venn import venn2
+mock_co_gene = dfk10_mock_annot.loc[dfk10_mock_annot.trc_type == 'CO', 'gene']
+icrf_co_gene = dfk10_icrf_annot.loc[dfk10_icrf_annot.trc_type == 'CO', 'gene'] 
+venn2([set(icrf_co_gene), set(mock_co_gene)], set_labels= ['+ICRF', '-ICRF'])
+
+
+ig, [ax1, ax2]  = plt.subplots(1,2, figsize=(3,3.5), tight_layout=True, sharey=True)
+ax1.spines['top'].set_visible(False)
+ax1.spines['right'].set_visible(False)
+ax2.spines['top'].set_visible(False)
+ax2.spines['right'].set_visible(False)
+ax1.bar([0,1],[CO_mock, HO_mock],edgecolor = 'k', color ='#019092', width=.5)
+ax1.set_xticks([0,1],['CO','HO'])
+ax1.set_ylabel('T-R collisions')
+ax1.set_title('-ICRF')
+ax2.bar([0,1],[CO_icrf, HO_icrf],edgecolor = 'k', color ='#019092', width=.5)
+ax2.set_xticks([0,1],['CO','HO'])
+ax2.set_title('+ICRF')
